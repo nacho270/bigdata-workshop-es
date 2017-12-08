@@ -1,7 +1,7 @@
 package es.openweather
 
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.streaming.{OutputMode, ProcessingTime}
+import org.apache.spark.sql.streaming.{ OutputMode, ProcessingTime }
 import org.apache.spark.sql.types._
 
 object WeatherConsumer extends App {
@@ -19,13 +19,15 @@ object WeatherConsumer extends App {
   val Array(brokers, topics) = args
   //  val brokers = "kafka:9092"
   //  val topics = "OpenWeather"
+  private val CITIES_FILE = "/dataset/openweather/cityList.csv"
   val spark = SparkSession.builder.appName("Weather:Streaming").getOrCreate()
   val jsons = spark.readStream
     .format("kafka")
     .option("kafka.bootstrap.servers", brokers)
     .option("subscribe", topics)
     .load()
-
+  
+  
   val schema = StructType(Seq(
     StructField("id", LongType, nullable = false),
     StructField("name", StringType, nullable = false),
@@ -40,11 +42,11 @@ object WeatherConsumer extends App {
       .add("humidity", IntegerType, nullable = false)
       .add("temp_max", FloatType, nullable = false)
       .add("temp_min", FloatType, nullable = false), nullable = false)
-//    ESTO NO ANDA. Me base en https://stackoverflow.com/questions/39485374/how-to-create-schema-array-in-data-frame-with-spark
-//    StructField("weather", ArrayType(StructType(Array(
-//      StructField("id", LongType, nullable = false),
-//      StructField("main", LongType, nullable = false)
-//    ))), nullable = false)
+  //    ESTO NO ANDA. Me base en https://stackoverflow.com/questions/39485374/how-to-create-schema-array-in-data-frame-with-spark
+  //    StructField("weather", ArrayType(StructType(Array(
+  //      StructField("id", LongType, nullable = false),
+  //      StructField("main", LongType, nullable = false)
+  //    ))), nullable = false)
   ))
 
   import org.apache.spark.sql.functions._
@@ -54,6 +56,19 @@ object WeatherConsumer extends App {
   val weatherJSON = jsons.select(from_json($"value".cast("string"), schema, jsonOptions).as("values"))
   val weather = weatherJSON.select($"values.*")
 
+  final case class CitiesCSV(
+    ID: String,
+    City: String,
+    lat: String,
+    lon: String,
+    countryCode: String)
+
+  val cities = spark.read
+    .option("header", "true")
+    .option("charset", "UTF8")
+    .csv(CITIES_FILE)
+    .as[CitiesCSV]
+  
   weather.printSchema
 
   weather.
@@ -67,8 +82,8 @@ object WeatherConsumer extends App {
     trigger(ProcessingTime("40 seconds")).
     start()
 
-  val avgWindSpeed = weather.
-    groupBy($"id").
+  val avgWindSpeed = weather.join(cities,"ID").
+    groupBy($"City").
     agg(avg($"wind.speed"))
 
   val query = avgWindSpeed.writeStream.
